@@ -17,6 +17,8 @@ import java.util.concurrent.Future;
 //import edu.rit.ds.RemoteEventFilter;
 //import edu.rit.ds.RemoteEventGenerator;
 //import edu.rit.ds.RemoteEventListener;
+import edu.rit.ds.RemoteEventGenerator;
+import edu.rit.ds.RemoteEventListener;
 import edu.rit.ds.registry.AlreadyBoundException;
 import edu.rit.ds.registry.NotBoundException;
 import edu.rit.ds.registry.RegistryEvent;
@@ -100,7 +102,6 @@ public class GPSOffice implements GPSOfficeRef {
 		registryEventFilter.reportType("GPSOffice").reportUnbound();
 		registryProxy.addEventListener(registryEventListener,
 				registryEventFilter);
-		// remoteEventGenerator = new RemoteEventGenerator<GPSOfficeEvent>();
 		//
 		// remoteEventListner = new RemoteEventListener<GPSOfficeEvent>() {
 		//
@@ -323,20 +324,37 @@ public class GPSOffice implements GPSOfficeRef {
 	@Override
 	public void packetForward(final Packet packet) {
 
-		
-		System.out.println("Packet received");
-		System.out.println(packet.getxValue() + " " + packet.getyValue());
+		RemoteEventGenerator<CustomerEvent> remoteEventGenerator = new RemoteEventGenerator<CustomerEvent>();
+		try {
+			remoteEventGenerator.addListener(packet.getListener());
+		} catch (RemoteException e1) {
+			e1.printStackTrace();
+		}
+
+		String message = "Package number " + packet.getTrackingNumber()
+				+ " arrived at " + cityName + " office";
+		System.out.println(message);
+		remoteEventGenerator.reportEvent(new CustomerEvent(message));
 		try {
 			Thread.sleep(3000);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
-
 		final GPSOfficeRef office = getClosestOffice(packet);
+		// try {
+		// office.getCity();
+		// } catch (RemoteException e1) {
+		// e1.printStackTrace();
+		// }
 		if (office.equals(this)) {
-			System.out.println("Dstination reached");
+			message = "Package number " + packet.getTrackingNumber()
+					+ " delivered from " + cityName + " office to ("
+					+ packet.getxValue() + "," + packet.getyValue() + ")";
+			System.out.println(message);
+			remoteEventGenerator.reportEvent(new CustomerEvent(message));
 		} else {
 			executor.execute(new Runnable() {
+
 				@Override
 				public void run() {
 					try {
@@ -346,42 +364,23 @@ public class GPSOffice implements GPSOfficeRef {
 					}
 				}
 			});
+			message = "Package number " + packet.getTrackingNumber()
+					+ " departed from " + cityName + " office";
+			remoteEventGenerator.reportEvent(new CustomerEvent(message));
 		}
-		// executor.submit(neighbors.get(1));
-		// GPSOfficeRef office = getClosestOffice(packet);
-		// if (office == null) {
-		// result = "Dstination reached";
-		// } else {
-		// try {
-		// remoteEventGenerator.reportEvent(new GPSOfficeEvent(packet,
-		// office));
-		// } catch (NullPointerException e) {
-		//
-		// }
-		// }
-		// List<String> list = new ArrayList<String>();
-		// String office = "GPS office at " + cityName + "has co-ordinates "
-		// + xValue + "," + yValue;
-		// Future<List<String>> submit = executor.submit(neighbors.get(1));
-		// System.out.println(office);
-		// try {
-		// list.add(office);
-		// list.addAll(submit.get());
-		// } catch (InterruptedException e) {
-		// e.printStackTrace();
-		// } catch (ExecutionException e) {
-		// e.printStackTrace();
-		// }
-		// return list;
+
+	}
+
+	public void createPacket(double xVal, double yVal,
+			RemoteEventListener<CustomerEvent> remoteListener)
+			throws RemoteException {
+		Packet packet = new Packet(xVal, yVal, System.currentTimeMillis(),
+				remoteListener);
+		packetForward(packet);
 	}
 
 	@Override
 	public String getCity() throws RemoteException {
 		return this.cityName;
 	}
-
-	// @Override
-	// public void run() {
-	// System.out.println("Current city : "+cityName);
-	// }
 }

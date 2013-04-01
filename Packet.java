@@ -2,7 +2,9 @@
 
 import java.io.Serializable;
 
-public class Packet implements Serializable{
+import edu.rit.ds.RemoteEventListener;
+
+public class Packet implements Serializable {
 
 	/**
 	 * 
@@ -11,28 +13,29 @@ public class Packet implements Serializable{
 	private long trackingNumber;
 	private double xValue;
 	private double yValue;
-	
-	public long getTrackingNumber() {
-		return trackingNumber;
+	private RemoteEventListener<CustomerEvent> remoteEventListener;
+
+	public Packet(double xValue, double yValue, long trackingNumber,
+			RemoteEventListener<CustomerEvent> remoteListener) {
+		this.xValue = xValue;
+		this.yValue = yValue;
+		this.trackingNumber = trackingNumber;
+		this.remoteEventListener = remoteListener;
 	}
 
-	public void setTrackingNumber(long trackingNumber) {
-		this.trackingNumber = trackingNumber;
+	public long getTrackingNumber() {
+		return trackingNumber;
 	}
 
 	public double getxValue() {
 		return xValue;
 	}
 
-	public void setxValue(double xValue) {
-		this.xValue = xValue;
-	}
-
 	public double getyValue() {
 		return yValue;
 	}
 
-	public void setyValue(double yValue) {
-		this.yValue = yValue;
+	public RemoteEventListener<CustomerEvent> getListener() {
+		return this.remoteEventListener;
 	}
 }
