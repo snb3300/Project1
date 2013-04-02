@@ -39,7 +39,7 @@ public class Customer {
 		try {
 			return Integer.parseInt(value);
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid value for " + name);
+			throw new IllegalArgumentException("Invalid argument passed for " + name);
 		}
 	}
 
@@ -47,7 +47,7 @@ public class Customer {
 		try {
 			return Double.parseDouble(value);
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid value for " + name);
+			throw new IllegalArgumentException("Invalid argument passed for " + name);
 		}
 	}
 
@@ -88,8 +88,7 @@ public class Customer {
 		try {
 			Customer c = new Customer(args);
 			GPSOfficeRef office = c.getObject();
-			office.createPacket(c.xValue, c.yValue, c.createListener());
-			office.packetForward(c.packet);
+			office.sendPacket(c.xValue, c.yValue, c.createListener());
 		} catch (IOException e) {
 			e.getMessage();
 		}

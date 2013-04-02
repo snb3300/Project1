@@ -15,7 +15,7 @@ public interface GPSOfficeRef extends Remote {
 
 	public String getCity() throws RemoteException;
 
-	public void createPacket(double xValue, double yValue,
+	public void sendPacket(double xValue, double yValue,
 			RemoteEventListener<CustomerEvent> remoteListener)
 			throws RemoteException;
 }
