@@ -5,13 +5,11 @@ import java.rmi.NoSuchObjectException;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 
 import edu.rit.ds.RemoteEventGenerator;
 import edu.rit.ds.RemoteEventListener;
@@ -33,8 +31,8 @@ public class GPSOffice implements GPSOfficeRef {
 	private RegistryEventListener registryEventListener;
 	private RegistryEventFilter registryEventFilter;
 	private RemoteEventGenerator<GPSOfficeEvent> remoteGenerator;
-	private List<GPSOfficeRef> neighbors;
-	private int totalOfficeObjects;
+	private List<NeighborStorage> neighbors;
+	// private int totalOfficeObjects;
 	private static final int maxNeighbors = 3;
 	private ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -49,7 +47,7 @@ public class GPSOffice implements GPSOfficeRef {
 		portNumber = parseInt(args[1], "portNumber");
 		xValue = parseDouble(args[3], "X co-ordinate");
 		yValue = parseDouble(args[4], "Y co-ordinate");
-		neighbors = new ArrayList<GPSOfficeRef>();
+		neighbors = new ArrayList<NeighborStorage>();
 		// Collections.synchronizedList(neighbors);
 		registryProxy = new RegistryProxy(hostName, portNumber);
 		UnicastRemoteObject.exportObject(this, 0);
@@ -71,7 +69,7 @@ public class GPSOffice implements GPSOfficeRef {
 			throw re;
 		}
 
-		totalOfficeObjects = 0;
+		// totalOfficeObjects = 0;
 		updateNeighbors();
 		registryEventListener = new RegistryEventListener() {
 			@Override
@@ -82,16 +80,15 @@ public class GPSOffice implements GPSOfficeRef {
 					executor.execute(new Runnable() {
 						@Override
 						public void run() {
-							GPSOfficeRef office = null;
 							try {
-								office = (GPSOfficeRef) registryProxy
+								GPSOfficeRef office = (GPSOfficeRef) registryProxy
 										.lookup(name);
+								addNewNeighbor(office);
 							} catch (RemoteException e) {
 								e.printStackTrace();
 							} catch (NotBoundException e) {
 								e.printStackTrace();
 							}
-							addNewNeighbor(office);
 							printNeighbor();
 						}
 					});
@@ -99,7 +96,7 @@ public class GPSOffice implements GPSOfficeRef {
 					executor.execute(new Runnable() {
 						@Override
 						public void run() {
-							deleteNeighbor();
+							deleteNeighbor(name);
 							printNeighbor();
 						}
 					});
@@ -119,67 +116,94 @@ public class GPSOffice implements GPSOfficeRef {
 	}
 
 	private void addNewNeighbor(GPSOfficeRef office) {
-		synchronized (neighbors) {
-			if (office != null) {
-				if (neighbors.size() < maxNeighbors) {
-					neighbors.add(office);
-				} else {
-					for (GPSOfficeRef ref : neighbors) {
-						try {
-							double l1 = getDistance(this, ref);
-							double l2 = getDistance(this, office);
-							if (l1 > l2) {
-								neighbors.remove(ref);
-								neighbors.add(office);
+
+		try {
+
+			synchronized (neighbors) {
+				if (office != null) {
+					double dist = getDistance(this, office);
+					NeighborStorage neighbor = new NeighborStorage(office,
+							office.getCity(), office.getXValue(),
+							office.getYValue(), dist);
+					if (neighbors.size() < maxNeighbors) {
+						neighbors.add(neighbor);
+					} else {
+						for (int i = 0; i < maxNeighbors; i++) {
+							if (dist < neighbors.get(i).getDistance()) {
+								neighbors.set(i, neighbor);
 								break;
 							}
-						} catch (RemoteException e) {
-							neighbors.remove(ref);
-							neighbors.add(office);
 						}
 					}
 				}
-
 			}
+			Collections.sort(neighbors);
+		} catch (RemoteException e) {
+			System.out.println("Remote exp in add New");
 		}
 	}
 
-	private void deleteNeighbor() {
+	private void deleteNeighbor(String name) {
 		synchronized (neighbors) {
-			Iterator<GPSOfficeRef> iterator = neighbors.iterator();
+			Iterator<NeighborStorage> iterator = neighbors.iterator();
 			while (iterator.hasNext()) {
-				GPSOfficeRef ref = iterator.next();
-				try {
-					ref.getCity();
-				} catch (RemoteException e) {
-					neighbors.remove(ref);
+				if (iterator.next().getCity().equals(name)) {
+					iterator.remove();
+					break;
 				}
 			}
 		}
 		updateNeighbors();
 	}
 
-	private void printNeighbor() {
-		synchronized (neighbors) {
-			for (GPSOfficeRef office : neighbors) {
-				try {
-					System.out.print(office.getCity() + " ");
-				} catch (RemoteException e) {
-					System.err.println("Error printing");
-					continue;
-				}
-			}
-			System.out.println();
+	private boolean isPresent(GPSOfficeRef office) {
+		boolean ret = false;
+		int lim = Math.min(neighbors.size(), maxNeighbors);
+		for (int i = 0; i < lim; i++) {
+			if (neighbors.get(i).getOffice().equals(office))
+				return true;
 		}
+		return ret;
+	}
+
+	private void printNeighbor() {
+		int lim = Math.min(maxNeighbors, neighbors.size());
+		for (int i = 0; i < lim; i++) {
+			System.out.print(neighbors.get(i).getCity() + " ");
+		}
+		System.out.println();
 	}
 
 	private void updateNeighbors() {
+		List<String> names = new ArrayList<String>();
+		try {
+			names = registryProxy.list("GPSOfficeRef");
+		} catch (RemoteException e1) {
+			System.err.print("Error retrieving names of GPSOffices");
+			System.out.println(e1.getMessage());
+		}
 
-		List<GPSOfficeRef> list = new ArrayList<GPSOfficeRef>();
+		synchronized (neighbors) {
+			for (String obj : names) {
+				GPSOfficeRef office;
+				try {
+					office = (GPSOfficeRef) registryProxy.lookup(obj);
+					if (office != null
+							&& !this.getCity().equals(office.getCity())
+							&& !isPresent(office)) {
+						addNewNeighbor(office);
+					}
 
-		list = getAllNeighbors();
-
-		getNearestNeighbors(list);
+				} catch (RemoteException e) {
+					System.out
+							.println("Remote exception in getting all neighbors");
+					continue;
+				} catch (NotBoundException e) {
+					// TODO Auto-generated catch block
+					System.out.println("Not bound");
+				}
+			}
+		}
 	}
 
 	// private void checkForDelete(List<GPSOfficeRef> list) {
@@ -216,39 +240,17 @@ public class GPSOffice implements GPSOfficeRef {
 		return distance;
 	}
 
-	private void getNearestNeighbors(List<GPSOfficeRef> allNeighbors) {
-		for (GPSOfficeRef office : allNeighbors) {
-			if ((office != null) && (!neighbors.contains(office))) {
-				addNewNeighbor(office);
-			}
-		}
-	}
+	// private void getNearestNeighbors(List<GPSOfficeRef> allNeighbors) {
+	// for (GPSOfficeRef office : allNeighbors) {
+	// if ((office != null) && (!neighbors.contains(office))) {
+	// addNewNeighbor(office);
+	// }
+	// }
+	// }
 
-	private List<GPSOfficeRef> getAllNeighbors() {
-		List<GPSOfficeRef> l = new ArrayList<GPSOfficeRef>();
-		List<String> names = new ArrayList<String>();
-		try {
-			names = registryProxy.list("GPSOffice");
-		} catch (RemoteException e1) {
-			System.err.print("Error retrieving names of GPSOffices");
-			System.out.println(e1.getMessage());
-		}
-
-		for (String obj : names) {
-			GPSOfficeRef office;
-			try {
-				office = (GPSOfficeRef) registryProxy.lookup(obj);
-				if (office != null && !this.getCity().equals(office.getCity()))
-					l.add(office);
-			} catch (RemoteException e) {
-				System.out.println("Remote exception in getting all neighbors");
-			} catch (NotBoundException e) {
-				// TODO Auto-generated catch block
-				System.out.println("Not bound");
-			}
-		}
-		return l;
-	}
+	// private void getAllNeighbors() {
+	//
+	// }
 
 	public double getXValue() {
 		return this.xValue;
@@ -274,27 +276,27 @@ public class GPSOffice implements GPSOfficeRef {
 		}
 	}
 
-	private final GPSOfficeRef getClosestOffice(Packet p) {
-		synchronized (neighbors) {
-			double minDist = calculateEucledian(this.xValue, p.getxValue(),
-					this.yValue, p.getyValue());
-			GPSOfficeRef result = null;
-
-			try {
-				for (GPSOfficeRef office : neighbors) {
-					double dist = calculateEucledian(office.getXValue(),
-							p.getxValue(), office.getYValue(), p.getyValue());
-					if (dist < minDist) {
-						result = office;
-						minDist = dist;
-					}
-				}
-			} catch (IOException e) {
-				System.err.println(e.getMessage());
-			}
-			return result;
-		}
-	}
+	// private final GPSOfficeRef getClosestOffice(Packet p) {
+	// synchronized (neighbors) {
+	// double minDist = calculateEucledian(this.xValue, p.getxValue(),
+	// this.yValue, p.getyValue());
+	// GPSOfficeRef result = null;
+	//
+	// try {
+	// for (GPSOfficeRef office : neighbors) {
+	// double dist = calculateEucledian(office.getXValue(),
+	// p.getxValue(), office.getYValue(), p.getyValue());
+	// if (dist < minDist) {
+	// result = office;
+	// minDist = dist;
+	// }
+	// }
+	// } catch (IOException e) {
+	// System.err.println(e.getMessage());
+	// }
+	// return result;
+	// }
+	// }
 
 	@Override
 	public void packetForward(final Packet packet) throws RemoteException {
@@ -322,9 +324,8 @@ public class GPSOffice implements GPSOfficeRef {
 			System.out.println("Thread interuupted");
 			throw new IllegalArgumentException("Office shutdown");
 		}
-		final GPSOfficeRef office = getClosestOffice(packet);
 
-		if (office == null) {
+		if (neighbors.size() <= 0) {
 			message = "Package number " + packet.getTrackingNumber()
 					+ " delivered from " + cityName + " office to ("
 					+ packet.getxValue() + "," + packet.getyValue() + ")";
@@ -332,10 +333,10 @@ public class GPSOffice implements GPSOfficeRef {
 			remoteEventGenerator.reportEvent(new CustomerEvent(message));
 		} else {
 			executor.execute(new Runnable() {
-
 				@Override
 				public void run() {
 					// TODO Auto-generated method stub
+					GPSOfficeRef office = neighbors.get(0).getOffice();
 					try {
 						office.packetForward(packet);
 					} catch (Exception e) {
