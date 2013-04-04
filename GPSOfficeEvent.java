@@ -8,20 +8,14 @@ public class GPSOfficeEvent extends RemoteEvent{
 	 * 
 	 */
 	private static final long serialVersionUID = 1L;
-	private Packet packet;
-	private GPSOfficeRef gpsOffice;
+	private String message;
 	
-	public GPSOfficeEvent(Packet packet, GPSOfficeRef office) {
-		this.gpsOffice = office;
-		this.packet = packet;
+	public GPSOfficeEvent(String message) {
+		this.message = message;
 	}
 	
-	public Packet getPacket() {
-		return this.packet;
-	}
-	
-	public GPSOfficeRef getGPSOffice() {
-		return this.gpsOffice;
+	public String getMessage() {
+		return this.message;
 	}
 	
 //	public void setGPSOffice(GPSOfficeRef office) {

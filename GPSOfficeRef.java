@@ -7,7 +7,7 @@ import edu.rit.ds.RemoteEventListener;
 
 public interface GPSOfficeRef extends Remote {
 
-	public void packetForward(Packet packet) throws RemoteException;
+	public void packetForward(final Packet packet) throws RemoteException;
 
 	public double getXValue() throws RemoteException;
 
@@ -17,5 +17,8 @@ public interface GPSOfficeRef extends Remote {
 
 	public void sendPacket(double xValue, double yValue,
 			RemoteEventListener<CustomerEvent> remoteListener)
+			throws RemoteException;
+
+	public void addListener(RemoteEventListener<GPSOfficeEvent> listener)
 			throws RemoteException;
 }

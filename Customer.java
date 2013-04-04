@@ -16,7 +16,6 @@ public class Customer {
 	private double xValue;
 	private double yValue;
 	private RegistryProxy registryProxy;
-	private Packet packet;
 	private RemoteEventListener<CustomerEvent> remoteListner;
 
 	public Customer(String[] args) throws IOException {
@@ -39,7 +38,8 @@ public class Customer {
 		try {
 			return Integer.parseInt(value);
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid argument passed for " + name);
+			throw new IllegalArgumentException("Invalid argument passed for "
+					+ name);
 		}
 	}
 
@@ -47,7 +47,8 @@ public class Customer {
 		try {
 			return Double.parseDouble(value);
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid argument passed for " + name);
+			throw new IllegalArgumentException("Invalid argument passed for "
+					+ name);
 		}
 	}
 
@@ -72,7 +73,8 @@ public class Customer {
 					throws RemoteException {
 				String message = theEvent.getMessage();
 				System.out.println(message);
-				if (message.contains("delivered from")) {
+				if (message.contains("delivered from")
+						|| message.contains("lost by")) {
 					System.exit(0);
 				}
 			}
