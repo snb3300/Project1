@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import edu.rit.ds.Lease;
 import edu.rit.ds.RemoteEventGenerator;
 import edu.rit.ds.RemoteEventListener;
 import edu.rit.ds.registry.AlreadyBoundException;
@@ -51,7 +52,7 @@ public class GPSOffice implements GPSOfficeRef {
 		// Collections.synchronizedList(neighbors);
 		registryProxy = new RegistryProxy(hostName, portNumber);
 		UnicastRemoteObject.exportObject(this, 0);
-
+		remoteGenerator = new RemoteEventGenerator<GPSOfficeEvent>();
 		try {
 			registryProxy.bind(cityName, this);
 		} catch (AlreadyBoundException abe) {
@@ -111,7 +112,6 @@ public class GPSOffice implements GPSOfficeRef {
 		registryEventFilter.reportType("GPSOffice").reportUnbound();
 		registryProxy.addEventListener(registryEventListener,
 				registryEventFilter);
-		remoteGenerator = new RemoteEventGenerator<GPSOfficeEvent>();
 		printNeighbor();
 	}
 
@@ -276,36 +276,30 @@ public class GPSOffice implements GPSOfficeRef {
 		}
 	}
 
-	// private final GPSOfficeRef getClosestOffice(Packet p) {
-	// synchronized (neighbors) {
-	// double minDist = calculateEucledian(this.xValue, p.getxValue(),
-	// this.yValue, p.getyValue());
-	// GPSOfficeRef result = null;
-	//
-	// try {
-	// for (GPSOfficeRef office : neighbors) {
-	// double dist = calculateEucledian(office.getXValue(),
-	// p.getxValue(), office.getYValue(), p.getyValue());
-	// if (dist < minDist) {
-	// result = office;
-	// minDist = dist;
-	// }
-	// }
-	// } catch (IOException e) {
-	// System.err.println(e.getMessage());
-	// }
-	// return result;
-	// }
-	// }
+	private final NeighborStorage getClosestOffice(Packet p) {
+
+		double minDist = calculateEucledian(this.xValue, p.getxValue(),
+				this.yValue, p.getyValue());
+		NeighborStorage result = null;
+
+		int lim = Math.min(neighbors.size(), maxNeighbors);
+		for (int i = 0; i < lim; i++) {
+			double dist = calculateEucledian(neighbors.get(i).getX(),
+					p.getxValue(), neighbors.get(i).getY(), p.getyValue());
+			if (dist < minDist) {
+				result = neighbors.get(i);
+				minDist = dist;
+			}
+		}
+
+		return result;
+
+	}
 
 	@Override
-	public void packetForward(final Packet packet) throws RemoteException {
+	public void packetForward(final Packet packet) {
 
-		RemoteEventGenerator<CustomerEvent> remoteEventGenerator = new RemoteEventGenerator<CustomerEvent>();
-
-		// executor.execute(new Runnable() {
-		// @Override
-		// public void run() {
+		final RemoteEventGenerator<CustomerEvent> remoteEventGenerator = new RemoteEventGenerator<CustomerEvent>();
 
 		try {
 			remoteEventGenerator.addListener(packet.getListener());
@@ -316,63 +310,99 @@ public class GPSOffice implements GPSOfficeRef {
 		String message = "Package number " + packet.getTrackingNumber()
 				+ " arrived at " + cityName + " office";
 		System.out.println(message);
-		// remoteGenerator.reportEvent(new GPSOfficeEvent(message));
-		remoteEventGenerator.reportEvent(new CustomerEvent(message));
+		remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
+				.getTrackingNumber()));
+		remoteGenerator.reportEvent(new GPSOfficeEvent(message));
 		try {
-			Thread.sleep(5000);
+			Thread.sleep(3000);
 		} catch (InterruptedException e) {
-			System.out.println("Thread interuupted");
-			throw new IllegalArgumentException("Office shutdown");
 		}
 
-		if (neighbors.size() <= 0) {
+		final NeighborStorage office = getClosestOffice(packet);
+		System.out.println(office);
+		if (office == null) {
 			message = "Package number " + packet.getTrackingNumber()
 					+ " delivered from " + cityName + " office to ("
 					+ packet.getxValue() + "," + packet.getyValue() + ")";
 			System.out.println(message);
-			remoteEventGenerator.reportEvent(new CustomerEvent(message));
+			remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
+					.getTrackingNumber()));
+			remoteGenerator.reportEvent(new GPSOfficeEvent(message));
 		} else {
+			final GPSOfficeRef o = office.getOffice();
+			String city = cityName;
+			try {
+				city = o.getCity();
+			} catch (RemoteException e1) {
+				String msg = "Package number " + packet.getTrackingNumber()
+						+ " lost by " + city + " office";
+				remoteEventGenerator.reportEvent(new CustomerEvent(msg, packet
+						.getTrackingNumber()));
+				remoteGenerator.reportEvent(new GPSOfficeEvent(msg));
+				return;
+			}
+			// message = "Package number " + packet.getTrackingNumber()
+			// + " departed from " + cityName + " office";
+			// remoteEventGenerator.reportEvent(new CustomerEvent(message,
+			// packet
+			// .getTrackingNumber()));
+			// remoteGenerator.reportEvent(new GPSOfficeEvent(message));
 			executor.execute(new Runnable() {
+
 				@Override
 				public void run() {
-					// TODO Auto-generated method stub
-					GPSOfficeRef office = neighbors.get(0).getOffice();
 					try {
-						office.packetForward(packet);
+						o.packetForward(packet);
+
 					} catch (Exception e) {
-						e.printStackTrace();
+						String msg = "Package number "
+								+ packet.getTrackingNumber() + " lost by "
+								+ office.getCity() + " office";
+						remoteEventGenerator.reportEvent(new CustomerEvent(msg,
+								packet.getTrackingNumber()));
+						remoteGenerator.reportEvent(new GPSOfficeEvent(msg));
 					}
 				}
 			});
-
 			message = "Package number " + packet.getTrackingNumber()
 					+ " departed from " + cityName + " office";
-			remoteEventGenerator.reportEvent(new CustomerEvent(message));
-			// remoteGenerator.reportEvent(new GPSOfficeEvent(message));
+			remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
+					.getTrackingNumber()));
+			remoteGenerator.reportEvent(new GPSOfficeEvent(message));
 		}
-
 	}
-
-	// });
-	// }
 
 	public void sendPacket(double xVal, double yVal,
 			RemoteEventListener<CustomerEvent> remoteListener)
 			throws RemoteException {
 		Packet packet = new Packet(xVal, yVal, System.currentTimeMillis(),
 				remoteListener);
-		packetForward(packet);
+		try {
+			packetForward(packet);
+		} catch (Exception e) {
+			System.out.println("Exception in send packet");
+		}
+		// } catch (RemoteException e) {
+		// String msg = "Package number " + packet.getTrackingNumber()
+		// + " lost by " + cityName + " office";
+		//
+		// }
 	}
 
 	@Override
-	public String getCity() throws RemoteException {
+	public String getCity() {
+		// try {
+		// Thread.sleep(4000);
+		// } catch (InterruptedException e) {
+		// e.printStackTrace();
+		// }
 		return this.cityName;
 	}
 
 	@Override
-	public void addListener(RemoteEventListener<GPSOfficeEvent> listener)
+	public Lease addListener(RemoteEventListener<GPSOfficeEvent> listener)
 			throws RemoteException {
-		remoteGenerator.addListener(listener);
+		return remoteGenerator.addListener(listener);
 	}
 
 }

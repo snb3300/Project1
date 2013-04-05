@@ -35,31 +35,40 @@ public class Headquarters {
 						"Invalid argument for port number");
 			}
 		}
-		executor = Executors.newCachedThreadPool();
+
 	}
 
-	public void initializeRegistry() throws RemoteException {
+	public void initialize() {
+		try {
+			initializeRegistry();
+			initializeRemoteListener();
+			initializeRegistryFilter();
+			add();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void initializeRegistry() throws RemoteException {
 		registry = new RegistryProxy(hostName, portNumber);
 		registryListener = new RegistryEventListener() {
 
 			@Override
 			public void report(long theSequenceNumber, RegistryEvent theEvent)
 					throws RemoteException {
-				final String str = new String(theEvent.objectName());
-				executor.execute(new Runnable() {
-
-					@Override
-					public void run() {
-						addSingleListener(str);
-					}
-				});
+				final String name = new String(theEvent.objectName());
+//				executor.execute(new Runnable() {
+//					@Override
+//					public void run() {
+						addSingleListener(name);
+//					}
+//				});
 			}
 		};
-
 		UnicastRemoteObject.exportObject(registryListener, 0);
 	}
 
-	public void initializeRemoteListener() throws RemoteException {
+	private void initializeRemoteListener() throws RemoteException {
 		remoteListener = new RemoteEventListener<GPSOfficeEvent>() {
 
 			@Override
@@ -71,32 +80,28 @@ public class Headquarters {
 		UnicastRemoteObject.exportObject(remoteListener, 0);
 	}
 
-	public void initializeRegistryFilter() throws RemoteException {
+	private void initializeRegistryFilter() throws RemoteException {
 		registryFilter = new RegistryEventFilter().reportType("GPSOfficeRef")
 				.reportBound();
 		registry.addEventListener(registryListener, registryFilter);
 	}
 
-	public void addListeners() {
-		executor.execute(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					for (String name : registry.list("GPSOfficeRef")) {
-						GPSOfficeRef office = (GPSOfficeRef) registry
-								.lookup(name);
-						office.addListener(remoteListener);
-					}
-				} catch (RemoteException e) {
-					e.printStackTrace();
-				} catch (NotBoundException e) {
-					e.printStackTrace();
-				}
+	private void add() {
+		// executor.execute(new Runnable() {
+		// @Override
+		// public void run() {
+		try {
+			for (String name : registry.list("GPSOfficeRef")) {
+				addSingleListener(name);
 			}
-		});
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+		// }
+		// });
 	}
 
-	public void addSingleListener(String objectName) {
+	private void addSingleListener(String objectName) {
 		try {
 			GPSOfficeRef office = (GPSOfficeRef) registry.lookup(objectName);
 			office.addListener(remoteListener);
@@ -110,10 +115,7 @@ public class Headquarters {
 	public static void main(String[] args) {
 		try {
 			Headquarters headquarter = new Headquarters(args);
-			headquarter.initializeRegistry();
-			headquarter.initializeRemoteListener();
-			headquarter.initializeRegistryFilter();
-			headquarter.addListeners();
+			headquarter.initialize();
 		} catch (RemoteException e) {
 			e.printStackTrace();
 		}

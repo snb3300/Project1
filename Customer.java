@@ -16,9 +16,10 @@ public class Customer {
 	private double xValue;
 	private double yValue;
 	private RegistryProxy registryProxy;
+	private long trackNumber;
 	private RemoteEventListener<CustomerEvent> remoteListner;
 
-	public Customer(String[] args) throws IOException {
+	public Customer(String[] args) {
 
 		if (args.length != 5) {
 			System.out
@@ -30,6 +31,7 @@ public class Customer {
 			this.portNumber = parseI(args[1], "port");
 			this.xValue = parseD(args[3], "xValue");
 			this.yValue = parseD(args[4], "yValue");
+			trackNumber = -1;
 		}
 
 	}
@@ -72,6 +74,7 @@ public class Customer {
 			public void report(long theSequenceNumber, CustomerEvent theEvent)
 					throws RemoteException {
 				String message = theEvent.getMessage();
+				trackNumber = theEvent.getTrackNumber();
 				System.out.println(message);
 				if (message.contains("delivered from")
 						|| message.contains("lost by")) {
@@ -87,12 +90,21 @@ public class Customer {
 	}
 
 	public static void main(String[] args) {
+		Customer c = null;
 		try {
-			Customer c = new Customer(args);
+			c = new Customer(args);
 			GPSOfficeRef office = c.getObject();
+			// office.getCity();
 			office.sendPacket(c.xValue, c.yValue, c.createListener());
-		} catch (IOException e) {
-			e.getMessage();
+		} catch (Exception e) {
+			if (c != null && c.trackNumber != -1) {
+				String msg = "Package number " + c.trackNumber + " lost by "
+						+ c.cityName + " office";
+				System.out.println(msg);
+				System.exit(0);
+			} else {
+				e.printStackTrace();
+			}
 		}
 	}
 }
