@@ -5,8 +5,6 @@ import java.rmi.NoSuchObjectException;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -15,29 +13,122 @@ import edu.rit.ds.Lease;
 import edu.rit.ds.RemoteEventGenerator;
 import edu.rit.ds.RemoteEventListener;
 import edu.rit.ds.registry.AlreadyBoundException;
-import edu.rit.ds.registry.NotBoundException;
 import edu.rit.ds.registry.RegistryEvent;
 import edu.rit.ds.registry.RegistryEventFilter;
 import edu.rit.ds.registry.RegistryEventListener;
 import edu.rit.ds.registry.RegistryProxy;
 
+/**
+ * Class GPSOffice represents a distributed GPSOffice in a Geographic Package
+ * System. Each GPSOffice will have maximum of three neighbors and it's 
+ * responsibility is to deliver the incoming customer package. It will either 
+ * forward packet directly to destination address or to one of it's neighbor.
+ * The forwarding logic is if destination location is closer to current office
+ * as compared to the distance of destination with the neighbors then the 
+ * current office will deliver the packet directly to destination, otherwise it
+ * will find out which one of it's current neighbors is closest to destination 
+ * and will forward packet to that destination.    
+ * 
+ * <b>This class uses the RIT Computer Science Library<b>
+ * 
+ * To register a single GPSOffice object with the registry use the following 
+ * command
+ * <p>
+ * Usage : java Start GPSOffice <host> <port> <name> <X> <Y>
+ * <p>
+ * where <host> - host name of the registry server
+ * 		 <port> - port number to which registry server is listening.
+ * 		 <name> - name of the GPSOffice
+ * 		 <X>    - x coordinate of the current GPS Office
+ * 		 <Y>    - y coordinate of the current GPS Office
+ * 
+ * @author Shridhar Bhalekar
+ *
+ */
 public class GPSOffice implements GPSOfficeRef {
-
+	
+	/**
+	 * Hostname or IP address of the machine running the Registry Server
+	 */
 	private String hostName;
+	
+	/**
+	 * Port Number of machine running the Registry Server
+	 */
 	private int portNumber;
+	
+	/**
+	 * Name of the GPSOffice which will be used to bind this object to Registry
+	 * Server
+	 */
 	private String cityName;
+	
+	/**
+	 * X coordinate of the current GPSOffice
+	 */
 	private double xValue;
+	
+	/**
+	 * Y coordinate of the current GPSOffice
+	 */
 	private double yValue;
+	
+	/**
+	 * Proxy for the RIT Computer Science Registry Server. 
+	 */
 	private RegistryProxy registryProxy;
+	
+	/**
+	 * Event listener on the Registry Server 
+	 */
 	private RegistryEventListener registryEventListener;
+	
+	/**
+	 * Filter to filter events on reported by event listener 
+	 */
 	private RegistryEventFilter registryEventFilter;
-	private RemoteEventGenerator<GPSOfficeEvent> remoteGenerator;
+	
+	/**
+	 * Event generator on remote event listeners
+	 */
+	private RemoteEventGenerator<PacketEvent> remoteGenerator;
+	
+	/**
+	 * List which will store maximum of three neighbors of the current GPSOffice
+	 */
 	private List<NeighborStorage> neighbors;
-	// private int totalOfficeObjects;
+	
+	/**
+	 * Maximum allowed neighbors
+	 */
 	private static final int maxNeighbors = 3;
-	private ExecutorService executor = Executors.newCachedThreadPool();
+	
+	/**
+	 * Thread pool executor for concurrency
+	 */
+	private ExecutorService executor;
 
+	/**
+	 * Constructs a new GPSOffice object
+	 * 
+	 * Command line arguments:
+	 * args[0] - registry server host name
+	 * args[1] - registry server port number
+	 * args[2] - GPSOffice name
+	 * args[3] - GPSOffice X coordinate
+	 * args[4] - GPSOffice Y coordinate
+	 * 
+	 * @param args Command Line arguments
+	 * 
+	 * @exception IllegalArgumentException
+	 * 			Thrown if command line arguments are not according to 
+	 *  		the requirements.
+	 *  
+	 *  @exception IOException
+	 *  		Thrown if any type of remote exception is thrown 
+	 */
 	public GPSOffice(String[] args) throws IOException {
+		
 		if (args.length != 5) {
 			System.out
 					.println("Usage: java Start GPSOffice <host> <port> <name> <X> <Y> ");
@@ -49,10 +140,18 @@ public class GPSOffice implements GPSOfficeRef {
 		xValue = parseDouble(args[3], "X co-ordinate");
 		yValue = parseDouble(args[4], "Y co-ordinate");
 		neighbors = new ArrayList<NeighborStorage>();
-		// Collections.synchronizedList(neighbors);
-		registryProxy = new RegistryProxy(hostName, portNumber);
+		
+		// initializing the registry proxy
+		try {
+			registryProxy = new RegistryProxy(hostName, portNumber);
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Cannot connact to " + hostName
+					+ ":" + portNumber);
+		}
 		UnicastRemoteObject.exportObject(this, 0);
-		remoteGenerator = new RemoteEventGenerator<GPSOfficeEvent>();
+		
+		// remote event generator for the headquarter
+		remoteGenerator = new RemoteEventGenerator<PacketEvent>();
 		try {
 			registryProxy.bind(cityName, this);
 		} catch (AlreadyBoundException abe) {
@@ -61,44 +160,34 @@ public class GPSOffice implements GPSOfficeRef {
 			} catch (NoSuchObjectException nso1) {
 			}
 			throw new IllegalArgumentException("GPS Office with " + cityName
-					+ " already bounded to the registry");
+					+ " already bound to the registry");
 		} catch (RemoteException re) {
 			try {
 				UnicastRemoteObject.unexportObject(this, true);
 			} catch (NoSuchObjectException nso2) {
 			}
-			throw re;
+			throw new IllegalArgumentException(
+					"Cannot connect to registry server at " + hostName + ":"
+							+ portNumber);
+		} catch (Exception e) {
+			try {
+				UnicastRemoteObject.unexportObject(this, true);
+			} catch (NoSuchObjectException nso2) {
+			}
+			e.printStackTrace();
 		}
 
-		// totalOfficeObjects = 0;
 		updateNeighbors();
 		registryEventListener = new RegistryEventListener() {
 			@Override
 			public void report(long arg0, RegistryEvent event)
 					throws RemoteException {
-				final String name = new String(event.objectName());
+
 				if (event.objectWasBound()) {
 					executor.execute(new Runnable() {
 						@Override
 						public void run() {
-							try {
-								GPSOfficeRef office = (GPSOfficeRef) registryProxy
-										.lookup(name);
-								addNewNeighbor(office);
-							} catch (RemoteException e) {
-								e.printStackTrace();
-							} catch (NotBoundException e) {
-								e.printStackTrace();
-							}
-							printNeighbor();
-						}
-					});
-				} else {
-					executor.execute(new Runnable() {
-						@Override
-						public void run() {
-							deleteNeighbor(name);
-							printNeighbor();
+							updateNeighbors();
 						}
 					});
 				}
@@ -107,121 +196,96 @@ public class GPSOffice implements GPSOfficeRef {
 
 		UnicastRemoteObject.exportObject(registryEventListener, 0);
 
+		// Event filter on specific object type
 		registryEventFilter = new RegistryEventFilter();
-		registryEventFilter.reportType("GPSOffice").reportBound();
-		registryEventFilter.reportType("GPSOffice").reportUnbound();
+		registryEventFilter.reportType("GPSOfficeRef").reportBound();
+		registryEventFilter.reportType("GPSOfficeRef").reportUnbound();
 		registryProxy.addEventListener(registryEventListener,
 				registryEventFilter);
-		printNeighbor();
+		executor = Executors.newCachedThreadPool();
 	}
 
-	private void addNewNeighbor(GPSOfficeRef office) {
-
-		try {
-
-			synchronized (neighbors) {
-				if (office != null) {
-					double dist = getDistance(this, office);
-					NeighborStorage neighbor = new NeighborStorage(office,
-							office.getCity(), office.getXValue(),
-							office.getYValue(), dist);
-					if (neighbors.size() < maxNeighbors) {
-						neighbors.add(neighbor);
-					} else {
-						for (int i = 0; i < maxNeighbors; i++) {
-							if (dist < neighbors.get(i).getDistance()) {
-								neighbors.set(i, neighbor);
-								break;
-							}
+	/**
+	 * Take an object of GPSOffice and add it to the neighbor if it is closer
+	 * than other neighbors of the current office.
+	 * 
+	 * @param office Object of type GPSOffice to be added
+	 * 
+	 * @throws RemoteException
+	 * 			Thrown if remote method execution results in error
+	 */
+	private void addNewNeighbor(GPSOfficeRef office) throws RemoteException {
+		synchronized (neighbors) {
+			if (office != null) {
+				double cDist = evaluateDistance(this, office);
+				NeighborStorage neighbor = new NeighborStorage(office,
+						office.getCity(), office.getXValue(),
+						office.getYValue());
+				// if less than 3 neighbors then add directly to list
+				if (neighbors.size() < maxNeighbors) {
+					neighbors.add(neighbor);
+				} else {
+					// calculate the distance of GPSOffice argument with the 
+					// present neighbors and replace if near
+					for (int i = 0; i < maxNeighbors; i++) {
+						double nDist = evaluateDistance(office, neighbors
+								.get(i).getOffice());
+						if (cDist < nDist) {
+							neighbors.set(i, neighbor);
+							break;
 						}
 					}
 				}
 			}
-			Collections.sort(neighbors);
-		} catch (RemoteException e) {
-			System.out.println("Remote exp in add New");
 		}
+
 	}
 
-	private void deleteNeighbor(String name) {
-		synchronized (neighbors) {
-			Iterator<NeighborStorage> iterator = neighbors.iterator();
-			while (iterator.hasNext()) {
-				if (iterator.next().getCity().equals(name)) {
-					iterator.remove();
-					break;
-				}
-			}
-		}
-		updateNeighbors();
-	}
-
-	private boolean isPresent(GPSOfficeRef office) {
-		boolean ret = false;
-		int lim = Math.min(neighbors.size(), maxNeighbors);
-		for (int i = 0; i < lim; i++) {
-			if (neighbors.get(i).getOffice().equals(office))
-				return true;
-		}
-		return ret;
-	}
-
-	private void printNeighbor() {
-		int lim = Math.min(maxNeighbors, neighbors.size());
-		for (int i = 0; i < lim; i++) {
-			System.out.print(neighbors.get(i).getCity() + " ");
-		}
-		System.out.println();
-	}
-
+	/**
+	 * Get's the list of names of remote objects registered with the Registry 
+	 * Server. For each object name it requests that object from the Registry 
+	 * Server and try to add it to the neighbor list.
+	 */
 	private void updateNeighbors() {
 		List<String> names = new ArrayList<String>();
+		// list from Registry server
 		try {
 			names = registryProxy.list("GPSOfficeRef");
-		} catch (RemoteException e1) {
-			System.err.print("Error retrieving names of GPSOffices");
-			System.out.println(e1.getMessage());
+		} catch (Exception e1) {
+			System.out.println("Error retrieving names of GPSOffice");
+			e1.printStackTrace();
 		}
 
 		synchronized (neighbors) {
+			// look up from the registry and try to add to neighbor list
+			neighbors = new ArrayList<NeighborStorage>();
 			for (String obj : names) {
 				GPSOfficeRef office;
 				try {
 					office = (GPSOfficeRef) registryProxy.lookup(obj);
-					if (office != null
-							&& !this.getCity().equals(office.getCity())
-							&& !isPresent(office)) {
+					if (office != null && !office.getCity().equals(cityName)) {
 						addNewNeighbor(office);
 					}
 
-				} catch (RemoteException e) {
-					System.out
-							.println("Remote exception in getting all neighbors");
+				} catch (Exception e) {
 					continue;
-				} catch (NotBoundException e) {
-					// TODO Auto-generated catch block
-					System.out.println("Not bound");
 				}
 			}
 		}
 	}
 
-	// private void checkForDelete(List<GPSOfficeRef> list) {
-	// synchronized (neighbors) {
-	// Iterator<GPSOfficeRef> it = neighbors.iterator();
-	// while (it.hasNext()) {
-	// if (!list.contains(it.next())) {
-	// it.remove();
-	// }
-	// }
-	// // for (GPSOfficeRef neighbor : neighbors) {
-	// // if (!list.contains(neighbor))
-	// // neighbors.remove(neighbor);
-	// // }
-	// }
-	// }
-
-	private double calculateEucledian(double x1, double x2, double y1, double y2) {
+	/**
+	 * Evaluate Eucledian distance between to points represent by (x,y)
+	 * 
+	 * @param x1 X coordinate of first point
+	 * @param x2 X coordinate of second point
+	 * @param y1 Y coordinate of first point
+	 * @param y2 Y coordinate of second point
+	 * 
+	 * @return
+	 * 			Distance between the two points
+	 */
+	private double evaluateEucledian(double x1, double x2, double y1, double y2) {
 		double distance = 0.0;
 		double x = x2 - x1;
 		double y = y2 - y1;
@@ -229,180 +293,234 @@ public class GPSOffice implements GPSOfficeRef {
 		return distance;
 	}
 
-	private double getDistance(GPSOfficeRef office1, GPSOfficeRef office2)
+	/**
+	 * Evaluate the distance between two GPSOffice objects.
+	 * 
+	 * @param office1 First GPSOffice Object
+	 * @param office2 Second GPSOffice Object
+	 * @return
+	 * @throws RemoteException
+	 */
+	private double evaluateDistance(GPSOfficeRef office1, GPSOfficeRef office2)
 			throws RemoteException {
 		double distance = 0.0;
 		if (office2 != null) {
-			distance = calculateEucledian(office1.getXValue(),
+			distance = evaluateEucledian(office1.getXValue(),
 					office2.getXValue(), office1.getYValue(),
 					office2.getYValue());
 		}
 		return distance;
 	}
 
-	// private void getNearestNeighbors(List<GPSOfficeRef> allNeighbors) {
-	// for (GPSOfficeRef office : allNeighbors) {
-	// if ((office != null) && (!neighbors.contains(office))) {
-	// addNewNeighbor(office);
-	// }
-	// }
-	// }
-
-	// private void getAllNeighbors() {
-	//
-	// }
-
+	/**
+	 * Getter to get the X coordinate to current GPSOffice Object
+	 */
 	public double getXValue() {
 		return this.xValue;
 	}
 
+	/**
+	 * Getter to get the Y coordinate of current GPSOffice Object
+	 */
 	public double getYValue() {
 		return this.yValue;
 	}
 
+	/**
+	 * Parses a string to Integer
+	 * 
+	 * @param arg value to be parsed as integer
+	 * @param name name representing the value
+	 * 
+	 * @return integer after successful parse
+	 * 
+	 *  @exception IllegalArgumentException
+	 *  				Thrown if parsing results in exception
+	 */
 	private int parseInt(String arg, String name) {
 		try {
 			return Integer.parseInt(arg);
 		} catch (NumberFormatException nfe) {
-			throw new IllegalArgumentException("Invalid " + name + ":" + arg);
+			throw new IllegalArgumentException("Invalid argument for" + name
+					+ ":" + arg);
 		}
 	}
 
+	/**
+	 * Parses a string to Double
+	 * 
+	 * @param arg value to be parsed as double
+	 * @param name name representing the value
+	 * 
+	 * @return double after successful parse
+	 * 
+	 *  @exception IllegalArgumentException
+	 *  				Thrown if parsing results in exception
+	 */
 	private double parseDouble(String arg, String name) {
 		try {
 			return Double.parseDouble(arg);
 		} catch (NumberFormatException nfe) {
-			throw new IllegalArgumentException("Invalid " + name + ":" + arg);
+			throw new IllegalArgumentException("Invalid argumet for " + name
+					+ ":" + arg);
 		}
 	}
 
+	/**
+	 * Gets the closest GPSOffice to the destination location among the 
+	 * neighbors. It will return null if current GPSOffice is the closest to 
+	 * the destination location.
+	 * 
+	 * @param p Packet received by the GPSOffice
+	 * 
+	 * @return an GPSOffice object closest to destination location
+	 */
 	private final NeighborStorage getClosestOffice(Packet p) {
-
-		double minDist = calculateEucledian(this.xValue, p.getxValue(),
+		// distance of destination with current GPSOffice
+		double minDist = evaluateEucledian(this.xValue, p.getxValue(),
 				this.yValue, p.getyValue());
 		NeighborStorage result = null;
 
 		int lim = Math.min(neighbors.size(), maxNeighbors);
+		// check each neighbor distance with the desination location
 		for (int i = 0; i < lim; i++) {
-			double dist = calculateEucledian(neighbors.get(i).getX(),
+			double dist = evaluateEucledian(neighbors.get(i).getX(),
 					p.getxValue(), neighbors.get(i).getY(), p.getyValue());
 			if (dist < minDist) {
 				result = neighbors.get(i);
 				minDist = dist;
 			}
 		}
-
 		return result;
 
 	}
 
+	/**
+	 * Creates a new remote event to be generated by the remote event generator
+	 *  
+	 * @param type type of message to be generated
+	 * @param p Packet received by current GPSOffice
+	 * @param city name of the GPSOffice
+	 * 
+	 * @return an remote event
+	 */
+	private PacketEvent createNewPacketEvent(String type, Packet p, String city) {
+		PacketEvent event = null;
+		String message = "Package number " + p.getTrackingNumber();
+		if (type.equals("arrived")) {
+			message += " arrived at " + city + " office";
+		} else if (type.equals("departed")) {
+			message += " departed from " + city + " office";
+		} else if (type.equals("lost")) {
+			message += " lost by " + city + " office";
+		} else if (type.equals("delivered")) {
+			message += " delivered from " + city + " office to ("
+					+ p.getxValue() + "," + p.getyValue() + ")";
+		}
+		event = new PacketEvent(message, p.getTrackingNumber());
+		return event;
+	}
+
 	@Override
+	/**
+	 * Takes a customer packet analyze the packet, figure out the destination
+	 * and finally forward that packet either to destination or to one of the
+	 * neighbors.
+	 * 
+	 *  @param packet Packet received and to be forwarded
+	 */
 	public void packetForward(final Packet packet) {
+		
+		// event generator for the customer
+		final RemoteEventGenerator<PacketEvent> remoteEventGenerator = 
+			new RemoteEventGenerator<PacketEvent>();
 
-		final RemoteEventGenerator<CustomerEvent> remoteEventGenerator = new RemoteEventGenerator<CustomerEvent>();
-
+		// add listener to the generator
 		try {
 			remoteEventGenerator.addListener(packet.getListener());
 		} catch (RemoteException e1) {
-			System.err.println(e1.getMessage());
+			System.out.println("Failed to add listener for " + cityName);
+			e1.printStackTrace();
 		}
-
-		String message = "Package number " + packet.getTrackingNumber()
-				+ " arrived at " + cityName + " office";
-		System.out.println(message);
-		remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
-				.getTrackingNumber()));
-		remoteGenerator.reportEvent(new GPSOfficeEvent(message));
+		
+		// report the customer about the receipt of packet
+		remoteEventGenerator.reportEvent(createNewPacketEvent("arrived",
+				packet, cityName));
+		// report the headquarte about the receipt of the packet
+		remoteGenerator.reportEvent(createNewPacketEvent("arrived", packet,
+				cityName));
+		
+		// time for processing
 		try {
 			Thread.sleep(3000);
 		} catch (InterruptedException e) {
 		}
-
+		
 		final NeighborStorage office = getClosestOffice(packet);
-		System.out.println(office);
+
+		// if null the destination is closer than neighbors
 		if (office == null) {
-			message = "Package number " + packet.getTrackingNumber()
-					+ " delivered from " + cityName + " office to ("
-					+ packet.getxValue() + "," + packet.getyValue() + ")";
-			System.out.println(message);
-			remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
-					.getTrackingNumber()));
-			remoteGenerator.reportEvent(new GPSOfficeEvent(message));
+			remoteEventGenerator.reportEvent(createNewPacketEvent("delivered",
+					packet, cityName));
+			remoteGenerator.reportEvent(createNewPacketEvent("delivered",
+					packet, cityName));
 		} else {
 			final GPSOfficeRef o = office.getOffice();
-			String city = cityName;
-			try {
-				city = o.getCity();
-			} catch (RemoteException e1) {
-				String msg = "Package number " + packet.getTrackingNumber()
-						+ " lost by " + city + " office";
-				remoteEventGenerator.reportEvent(new CustomerEvent(msg, packet
-						.getTrackingNumber()));
-				remoteGenerator.reportEvent(new GPSOfficeEvent(msg));
-				return;
-			}
-			// message = "Package number " + packet.getTrackingNumber()
-			// + " departed from " + cityName + " office";
-			// remoteEventGenerator.reportEvent(new CustomerEvent(message,
-			// packet
-			// .getTrackingNumber()));
-			// remoteGenerator.reportEvent(new GPSOfficeEvent(message));
+			// execute the forward in a new thread
 			executor.execute(new Runnable() {
 
 				@Override
 				public void run() {
+					String city = new String(cityName);
 					try {
+						city = o.getCity();
 						o.packetForward(packet);
 
 					} catch (Exception e) {
-						String msg = "Package number "
-								+ packet.getTrackingNumber() + " lost by "
-								+ office.getCity() + " office";
-						remoteEventGenerator.reportEvent(new CustomerEvent(msg,
-								packet.getTrackingNumber()));
-						remoteGenerator.reportEvent(new GPSOfficeEvent(msg));
+						remoteEventGenerator.reportEvent(createNewPacketEvent(
+								"lost", packet, city));
+						remoteGenerator.reportEvent(createNewPacketEvent(
+								"lost", packet, city));
 					}
 				}
 			});
-			message = "Package number " + packet.getTrackingNumber()
-					+ " departed from " + cityName + " office";
-			remoteEventGenerator.reportEvent(new CustomerEvent(message, packet
-					.getTrackingNumber()));
-			remoteGenerator.reportEvent(new GPSOfficeEvent(message));
+			// report to customer about the forward 
+			remoteEventGenerator.reportEvent(createNewPacketEvent("departed", packet, cityName));
+			// report to headquarter about the forward
+			remoteGenerator.reportEvent(createNewPacketEvent("departed", packet, cityName));
 		}
 	}
 
-	public void sendPacket(double xVal, double yVal,
-			RemoteEventListener<CustomerEvent> remoteListener)
+	/**
+	 * Take the destination coordinates and remote listener
+	 * 
+	 * @param xVal X coordinate of the destination
+	 * @param yVal Y coordinate of the destination
+	 * @param remoteListener remote listener of the customer
+	 */
+	public void createSendPacket(double xVal, double yVal,
+			RemoteEventListener<PacketEvent> remoteListener)
 			throws RemoteException {
 		Packet packet = new Packet(xVal, yVal, System.currentTimeMillis(),
 				remoteListener);
-		try {
-			packetForward(packet);
-		} catch (Exception e) {
-			System.out.println("Exception in send packet");
-		}
-		// } catch (RemoteException e) {
-		// String msg = "Package number " + packet.getTrackingNumber()
-		// + " lost by " + cityName + " office";
-		//
-		// }
+		packetForward(packet);
+
 	}
 
 	@Override
+	/**
+	 * Getter to get the name of current GPSOffice 
+	 */
 	public String getCity() {
-		// try {
-		// Thread.sleep(4000);
-		// } catch (InterruptedException e) {
-		// e.printStackTrace();
-		// }
 		return this.cityName;
 	}
 
 	@Override
-	public Lease addListener(RemoteEventListener<GPSOfficeEvent> listener)
+	/**
+	 * Add a remote event listener on the remote event generator
+	 */
+	public Lease addListener(RemoteEventListener<PacketEvent> listener)
 			throws RemoteException {
 		return remoteGenerator.addListener(listener);
 	}
-
 }
